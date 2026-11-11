@@ -22,6 +22,7 @@ from mujoco_warp import rays
 from mjlab.entity import Entity
 from mjlab.sensor.builtin_sensor import ObjRef
 from mjlab.sensor.sensor import Sensor, SensorCfg
+from mjlab.utils.device import get_warp_device
 from mjlab.utils.lab_api.math import quat_from_matrix
 
 if TYPE_CHECKING:
@@ -500,7 +501,7 @@ class RayCastSensor(Sensor[RayCastData]):
     self._model = model
     self._mj_model = mj_model
     self._device = device
-    self._wp_device = wp.get_device(device)
+    self._wp_device = get_warp_device(device)
     num_envs = data.nworld
 
     # Normalize frame to tuple.
@@ -537,12 +538,20 @@ class RayCastSensor(Sensor[RayCastData]):
     self._num_rays_per_frame = self._local_offsets.shape[0]
     self._num_rays = self._num_frames * self._num_rays_per_frame
 
-    self._ray_pnt = wp.zeros((num_envs, self._num_rays), dtype=wp.vec3, device=device)
-    self._ray_vec = wp.zeros((num_envs, self._num_rays), dtype=wp.vec3, device=device)
-    self._ray_dist = wp.zeros((num_envs, self._num_rays), dtype=float, device=device)
-    self._ray_geomid = wp.zeros((num_envs, self._num_rays), dtype=int, device=device)
+    self._ray_pnt = wp.zeros(
+      (num_envs, self._num_rays), dtype=wp.vec3, device=self._wp_device
+    )
+    self._ray_vec = wp.zeros(
+      (num_envs, self._num_rays), dtype=wp.vec3, device=self._wp_device
+    )
+    self._ray_dist = wp.zeros(
+      (num_envs, self._num_rays), dtype=float, device=self._wp_device
+    )
+    self._ray_geomid = wp.zeros(
+      (num_envs, self._num_rays), dtype=int, device=self._wp_device
+    )
     self._ray_normal = wp.zeros(
-      (num_envs, self._num_rays), dtype=wp.vec3, device=device
+      (num_envs, self._num_rays), dtype=wp.vec3, device=self._wp_device
     )
 
     # Body exclusion: each frame's body_id repeated N times.
@@ -552,7 +561,7 @@ class RayCastSensor(Sensor[RayCastData]):
         body_excludes.extend([body_id] * self._num_rays_per_frame)
     else:
       body_excludes = [-1] * self._num_rays
-    self._ray_bodyexclude = wp.array(body_excludes, dtype=int, device=device)
+    self._ray_bodyexclude = wp.array(body_excludes, dtype=int, device=self._wp_device)
 
     self._geomgroup = _geom_groups_to_vec6(self.cfg.include_geom_groups)
 

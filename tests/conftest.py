@@ -11,6 +11,20 @@ import warp as wp
 from mjlab.entity import Entity, EntityArticulationInfoCfg, EntityCfg
 from mjlab.scene import Scene, SceneCfg
 from mjlab.sim.sim import Simulation, SimulationCfg
+from mjlab.utils.device import resolve_device
+
+_test_device: str | None = None
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+  parser.addoption(
+    "--device", default=None, help="Torch test device (cpu, cuda:N, or xpu:N)."
+  )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+  global _test_device
+  _test_device = config.getoption("--device")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -20,13 +34,11 @@ def configure_test_environment():
 
 
 def get_test_device() -> str:
-  """Get device for testing, preferring CUDA if available.
-
-  Can be overridden with FORCE_CPU=1 environment variable to test
-  CPU-only behavior on GPU machines.
-  """
+  """Prefer CUDA, then CPU, unless --device or FORCE_CPU selects otherwise."""
   if os.environ.get("FORCE_CPU") == "1":
     return "cpu"
+  if _test_device is not None:
+    return resolve_device(_test_device)
   return "cuda" if torch.cuda.is_available() else "cpu"
 
 

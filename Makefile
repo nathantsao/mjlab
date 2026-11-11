@@ -6,6 +6,10 @@ sync:
 sync-cpu:
 	uv sync --all-packages --extra cpu --group dev
 
+.PHONY: sync-xpu
+sync-xpu:
+	uv sync --all-packages --extra xpu --group dev
+
 .PHONY: format
 format:
 	uv run ruff format
@@ -38,6 +42,10 @@ test-cpu:
 .PHONY: test-cpu-fast
 test-cpu-fast:
 	FORCE_CPU=1 uv run pytest -m "not slow"
+
+.PHONY: test-xpu
+test-xpu:
+	uv run --no-sync pytest --device xpu:0
 
 .PHONY: test-all
 test-all: check test

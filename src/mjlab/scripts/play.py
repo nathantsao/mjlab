@@ -16,6 +16,7 @@ from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.scripts._cli import maybe_print_top_level_help
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
+from mjlab.utils.device import resolve_device
 from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
@@ -57,9 +58,8 @@ class PlayConfig:
 
 
 def run_play(task_id: str, cfg: PlayConfig):
-  configure_torch_backends()
-
-  device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+  device = resolve_device(cfg.device)
+  configure_torch_backends(device=device)
 
   env_cfg = load_env_cfg(task_id, play=True)
   agent_cfg = load_rl_cfg(task_id)

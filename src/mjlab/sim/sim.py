@@ -15,6 +15,7 @@ from mjlab.entity.variants import VARIANT_DEPENDENT_FIELDS, build_variant_model
 from mjlab.managers.event_manager import RecomputeLevel
 from mjlab.sim.randomization import expand_model_fields
 from mjlab.sim.sim_data import TorchArray, WarpBridge
+from mjlab.utils.device import get_warp_device, resolve_device
 from mjlab.utils.nan_guard import NanGuard, NanGuardCfg
 
 if TYPE_CHECKING:
@@ -200,15 +201,21 @@ class SimulationCfg:
       for name in self.broadphase_filter:
         wp_opt.broadphase_filter |= _BROADPHASE_FILTER_MAP[name]
     if self.graph_conditional is not None:
+      if self.graph_conditional and not wp.get_device().is_conditional_graph_supported:
+        raise ValueError(
+          f"Conditional graphs are not supported on {wp.get_device()}. "
+          "Use graph_conditional=False; ordinary GPU graphs remain available."
+        )
       wp_opt.graph_conditional = self.graph_conditional
 
 
 class Simulation:
   """GPU-accelerated MuJoCo simulation powered by MJWarp.
 
-  CUDA Graph Capture
-  ------------------
-  On CUDA devices with memory pools enabled, the simulation captures CUDA graphs
+  GPU Graph Capture
+  -----------------
+  On CUDA devices with memory pools enabled and graph-capable SYCL devices,
+  the simulation captures GPU graphs
   for ``step()``, ``forward()``, and ``reset()`` operations. Graph capture records
   a sequence of GPU kernels and their memory addresses, then replays the entire
   sequence with a single kernel launch, eliminating CPU overhead from repeated
@@ -236,8 +243,8 @@ class Simulation:
     variant_info: list[tuple[str, VariantMetadata]] | None = None,
   ):
     self.cfg = cfg
-    self.device = device
-    self.wp_device = wp.get_device(self.device)
+    self.device = resolve_device(device)
+    self.wp_device = get_warp_device(self.device)
     self.num_envs = num_envs
     self._default_model_fields: dict[str, torch.Tensor] = {}
     # Fields whose DR baseline is per-world (DR's `_select_default_values`
@@ -346,13 +353,13 @@ class Simulation:
     self._data_bridge = WarpBridge(self._wp_data)
     self._sensor_context: SensorContext | None = None
 
-    self.use_cuda_graph = self._should_use_cuda_graph()
+    self.use_graph = self._should_use_graph()
     self.create_graph()
 
     self.nan_guard = NanGuard(self.cfg.nan_guard, self.num_envs, self._mj_model)
 
   def create_graph(self) -> None:
-    """Capture CUDA graphs for step, forward, and reset operations.
+    """Capture GPU graphs for step, forward, and reset operations.
 
     This method must be called whenever GPU arrays in the model or data are
     replaced after initialization. The captured graphs hold pointers to the
@@ -363,13 +370,14 @@ class Simulation:
     - ``__init__()`` during simulation initialization
     - ``expand_model_fields()`` after replacing model arrays
 
-    On CPU devices or when memory pools are disabled, this is a no-op.
+    On CPU devices, CUDA without memory pools, or devices without graph capture
+    support, this is a no-op.
     """
     self.step_graph = None
     self.forward_graph = None
     self.reset_graph = None
     self.sense_graph = None
-    if self.use_cuda_graph:
+    if self.use_graph:
       with _suspend_gc(), wp.ScopedDevice(self.wp_device):
         with wp.ScopedCapture() as capture:
           mjwarp.step(self.wp_model, self.wp_data)
@@ -386,6 +394,15 @@ class Simulation:
           self.sense_graph = capture.graph
 
   # Properties.
+
+  @property
+  def use_cuda_graph(self) -> bool:
+    """Compatibility alias for the backend-independent ``use_graph`` flag."""
+    return self.use_graph
+
+  @use_cuda_graph.setter
+  def use_cuda_graph(self, enabled: bool) -> None:
+    self.use_graph = enabled
 
   @property
   def mj_model(self) -> mujoco.MjModel:
@@ -447,7 +464,8 @@ class Simulation:
     if invalid_fields:
       raise ValueError(f"Fields not found in model: {invalid_fields}")
 
-    expand_model_fields(self._wp_model, self.num_envs, list(fields))
+    with wp.ScopedDevice(self.wp_device):
+      expand_model_fields(self._wp_model, self.num_envs, list(fields))
     self._expanded_fields.update(fields)
     self._model_bridge.clear_cache()
 
@@ -455,7 +473,7 @@ class Simulation:
       self._sensor_context.recreate(self._mj_model, self._expanded_fields)
 
     # Field expansion allocates new arrays and replaces them via setattr. The
-    # CUDA graph captured the old memory addresses, so we must recreate it.
+    # GPU graph captured the old memory addresses, so we must recreate it.
     self.create_graph()
 
   def get_default_field(self, field: str) -> torch.Tensor:
@@ -491,7 +509,7 @@ class Simulation:
 
   def forward(self) -> None:
     with wp.ScopedDevice(self.wp_device):
-      if self.use_cuda_graph and self.forward_graph is not None:
+      if self.use_graph and self.forward_graph is not None:
         wp.capture_launch(self.forward_graph)
       else:
         mjwarp.forward(self.wp_model, self.wp_data)
@@ -499,7 +517,7 @@ class Simulation:
   def step(self) -> None:
     with wp.ScopedDevice(self.wp_device):
       with self.nan_guard.watch(self.data):
-        if self.use_cuda_graph and self.step_graph is not None:
+        if self.use_graph and self.step_graph is not None:
           wp.capture_launch(self.step_graph)
         else:
           mjwarp.step(self.wp_model, self.wp_data)
@@ -512,7 +530,7 @@ class Simulation:
         self._reset_mask.fill_(False)
         self._reset_mask[env_ids] = True
 
-      if self.use_cuda_graph and self.reset_graph is not None:
+      if self.use_graph and self.reset_graph is not None:
         wp.capture_launch(self.reset_graph)
       else:
         mjwarp.reset_data(self.wp_model, self.wp_data, reset=self._reset_mask_wp)
@@ -520,7 +538,7 @@ class Simulation:
   def set_sensor_context(self, ctx: SensorContext) -> None:
     """Wire a SensorContext for camera/raycast sensing.
 
-    Automatically re-captures CUDA graphs so the sense_graph includes
+    Automatically re-captures GPU graphs so the sense_graph includes
     the new sensor kernels.
     """
     self._sensor_context = ctx
@@ -530,22 +548,21 @@ class Simulation:
     """Execute the sense pipeline: prepare -> graph -> finalize.
 
     Runs BVH refit, camera rendering, and raycasting in a single
-    CUDA graph launch. Should be called once per env step, right
+    GPU graph launch. Should be called once per env step, right
     before observation computation.
     """
     if self._sensor_context is None:
       return
 
     ctx = self._sensor_context
-    ctx.prepare()
-
     with wp.ScopedDevice(self.wp_device):
-      if self.use_cuda_graph and self.sense_graph is not None:
+      ctx.prepare()
+      if self.use_graph and self.sense_graph is not None:
         wp.capture_launch(self.sense_graph)
       else:
         self._sense_kernel()
 
-    ctx.finalize()
+      ctx.finalize()
 
   # Private methods.
 
@@ -564,8 +581,10 @@ class Simulation:
     for sensor in ctx.raycast_sensors:
       sensor.raycast_kernel(rc=rc)
 
-  def _should_use_cuda_graph(self) -> bool:
-    """Determine if CUDA graphs can be used based on device and driver version."""
+  def _should_use_graph(self) -> bool:
+    """Select ordinary graph capture without applying CUDA checks to SYCL."""
+    if self.wp_device.is_sycl:
+      return self.wp_device.supports_graph_capture
     if not self.wp_device.is_cuda:
       return False
 

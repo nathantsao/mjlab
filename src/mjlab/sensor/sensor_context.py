@@ -11,6 +11,8 @@ import mujoco_warp as mjwarp
 import torch
 import warp as wp
 
+from mjlab.utils.device import get_warp_device
+
 if TYPE_CHECKING:
   from mjlab.sensor.camera_sensor import CameraSensor
   from mjlab.sensor.raycast_sensor import RayCastSensor
@@ -55,7 +57,8 @@ class SensorContext:
   ):
     self._model = model
     self._data = data
-    self.wp_device = wp.get_device(device)
+    self.device = device
+    self.wp_device = get_warp_device(device)
 
     # Sort camera sensors by camera index for consistent ordering.
     self.camera_sensors = sorted(camera_sensors, key=lambda s: s.camera_idx)
@@ -377,7 +380,7 @@ class SensorContext:
     """Unpack packed uint32 RGB data into separate channels.
 
     Called from Simulation._sense_kernel() so it gets captured in the
-    CUDA graph. No-op if no cameras need RGB.
+    GPU graph. No-op if no cameras need RGB.
     """
     if self._rgb_unpacked is not None:
       wp.launch(

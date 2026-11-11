@@ -59,7 +59,7 @@ def test_nan_guard_disabled_by_default(simple_model):
   sim.step()  # Should not trigger any capture.
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Likely bug on CPU MjWarp")
+@pytest.mark.skipif(get_test_device() == "cpu", reason="Likely bug on CPU MjWarp")
 def test_nan_guard_captures_and_dumps_on_nan(simple_model):
   """NaN guard should capture states and dump when NaN detected."""
   with tempfile.TemporaryDirectory() as tmpdir:
@@ -109,7 +109,7 @@ def test_nan_guard_captures_and_dumps_on_nan(simple_model):
     assert state.shape[0] == 1
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Likely bug on CPU MjWarp")
+@pytest.mark.skipif(get_test_device() == "cpu", reason="Likely bug on CPU MjWarp")
 def test_nan_guard_detects_correct_env_ids(simple_model):
   """NaN guard should correctly identify which environments have NaN/Inf."""
   with tempfile.TemporaryDirectory() as tmpdir:
@@ -261,7 +261,7 @@ def test_nan_guard_only_dumps_once(simple_model):
     assert len(dump_files) == 1
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Likely bug on CPU MjWarp")
+@pytest.mark.skipif(get_test_device() == "cpu", reason="Likely bug on CPU MjWarp")
 def test_nan_guard_respects_buffer_size(simple_model):
   """NaN guard should only keep last K states in buffer."""
   with tempfile.TemporaryDirectory() as tmpdir:
@@ -294,7 +294,7 @@ def test_nan_guard_respects_buffer_size(simple_model):
     assert "states_step_000010" in dump
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Likely bug on CPU MjWarp")
+@pytest.mark.skipif(get_test_device() == "cpu", reason="Likely bug on CPU MjWarp")
 def test_nan_guard_captures_high_indexed_envs(simple_model):
   """NaN guard should capture NaN in high-indexed environments beyond max_envs_to_dump."""
   with tempfile.TemporaryDirectory() as tmpdir:
@@ -362,7 +362,7 @@ def test_nan_guard_creates_latest_symlinks(simple_model):
     assert loaded_model.nq == simple_model.nq
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Likely bug on CPU MjWarp")
+@pytest.mark.skipif(get_test_device() == "cpu", reason="Likely bug on CPU MjWarp")
 def test_nan_guard_captures_mocap_state(mocap_model):
   """NaN guard should capture and restore mocap body poses."""
   with tempfile.TemporaryDirectory() as tmpdir:

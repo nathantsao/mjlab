@@ -11,6 +11,7 @@ from mjlab.entity import Entity
 from mjlab.scene import Scene
 from mjlab.sim.sim import Simulation, SimulationCfg
 from mjlab.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env_cfg
+from mjlab.utils.device import resolve_device
 from mjlab.utils.lab_api.math import (
   axis_angle_from_quat,
   quat_conjugate,
@@ -345,7 +346,7 @@ def main(
   output_name: str,
   input_fps: float = 30.0,
   output_fps: float = 50.0,
-  device: str = "cuda:0",
+  device: str | None = None,
   render: bool = False,
   line_range: tuple[int, int] | None = None,
 ):
@@ -360,9 +361,7 @@ def main(
     render: Whether to render the simulation and save a video.
     line_range: Range of lines to process from the CSV file.
   """
-  if device.startswith("cuda") and not torch.cuda.is_available():
-    print("[WARNING]: CUDA is not available. Falling back to CPU. This may be slow.")
-    device = "cpu"
+  device = resolve_device(device)
 
   sim_cfg = SimulationCfg()
   sim_cfg.mujoco.timestep = 1.0 / output_fps

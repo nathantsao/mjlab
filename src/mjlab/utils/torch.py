@@ -2,14 +2,20 @@ import torch
 from packaging.version import parse
 
 
-def configure_torch_backends(allow_tf32: bool = True, deterministic: bool = False):
-  """Configure PyTorch CUDA and cuDNN backends for performance/reproducibility.
+def configure_torch_backends(
+  allow_tf32: bool = True,
+  deterministic: bool = False,
+  *,
+  device: str | torch.device | None = None,
+):
+  """Configure CUDA-specific tuning only when the selected device is CUDA.
 
   Args:
     allow_tf32: If True, use TF32 precision for faster computation on Ampere+ GPUs. If
       False, use standard IEEE FP32 precision.
     deterministic: If True, use deterministic algorithms (slower but reproducible).
       If False, allow cuDNN to benchmark and select fastest algorithms.
+    device: Selected Torch device. If omitted, preserve the CUDA configuration.
 
   Note:
     TF32 uses reduced precision (10-bit mantissa vs 23-bit for FP32) for internal
@@ -17,6 +23,9 @@ def configure_torch_backends(allow_tf32: bool = True, deterministic: bool = Fals
 
     See https://pytorch.org/docs/stable/notes/cuda.html#tf32-on-ampere for details.
   """
+  if device is not None and torch.device(device).type != "cuda":
+    return
+
   torch_version = parse(torch.__version__.split("+")[0])  # Handle e.g., "2.9.0+cu118".
   if torch_version >= parse("2.9.0"):
     _configure_29(allow_tf32)

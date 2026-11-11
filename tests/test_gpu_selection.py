@@ -2,14 +2,17 @@
 
 import os
 
+import conftest
 import pytest
+import torch
 
 from mjlab.utils.gpu import select_gpus
 
 
 @pytest.fixture(autouse=True)
-def clean_cuda_env():
+def clean_cuda_env(monkeypatch):
   """Clean CUDA_VISIBLE_DEVICES before each test."""
+  monkeypatch.setattr(torch.backends.cuda, "is_built", lambda: True)
   original = os.environ.get("CUDA_VISIBLE_DEVICES")
   yield
   # Restore original value after test.
@@ -126,3 +129,35 @@ def test_select_gpus_mig_uuids():
   selected, num = select_gpus([0])
   assert selected == ["MIG-GPU-abc-123"]
   assert num == 1
+
+
+@pytest.mark.parametrize("cuda_available", [False, True])
+def test_legacy_test_device_selection(monkeypatch, cuda_available):
+  monkeypatch.setattr(conftest, "_test_device", None)
+  monkeypatch.setattr(torch.cuda, "is_available", lambda: cuda_available)
+  monkeypatch.delenv("FORCE_CPU", raising=False)
+
+  assert conftest.get_test_device() == ("cuda" if cuda_available else "cpu")
+
+
+@pytest.mark.parametrize("selected", ["cpu", "xpu:1"])
+def test_explicit_test_device_selection(monkeypatch, selected):
+  monkeypatch.setattr(conftest, "_test_device", selected)
+  monkeypatch.delenv("FORCE_CPU", raising=False)
+  resolved = []
+
+  def resolve(device):
+    resolved.append(device)
+    return device
+
+  monkeypatch.setattr(conftest, "resolve_device", resolve)
+
+  assert conftest.get_test_device() == selected
+  assert resolved == [selected]
+
+
+def test_force_cpu_overrides_explicit_test_device(monkeypatch):
+  monkeypatch.setattr(conftest, "_test_device", "xpu:0")
+  monkeypatch.setenv("FORCE_CPU", "1")
+
+  assert conftest.get_test_device() == "cpu"

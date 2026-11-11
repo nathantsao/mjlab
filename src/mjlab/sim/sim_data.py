@@ -1,7 +1,7 @@
 """Bridge for seamless PyTorch-Warp interoperability with zero-copy memory sharing.
 
 Provides automatic wrapping of Warp arrays as PyTorch-compatible objects while
-preserving shared memory and CUDA graph compatibility.
+preserving shared memory and GPU graph compatibility.
 """
 
 from typing import Any, Dict, Generic, Optional, Tuple, TypeVar
@@ -17,40 +17,35 @@ class TorchArray:
 
   def __init__(self, wp_array: wp.array, nworld: int | None = None) -> None:
     """Initialize the tensor proxy with a Warp array."""
+    device = wp_array.device
+    if device is None:
+      raise ValueError("TorchArray requires an allocated Warp array with a device.")
+    if device.is_sycl:
+      wp.set_torch_stream_enabled(wp.device_to_torch(device))
     self._wp_array = wp_array
     # Workaround for Warp bug: wp.to_torch fails on empty CPU arrays.
-    if wp_array.device.is_cpu and wp_array.size == 0:  # type: ignore[union-attr]
-      self._tensor = torch.zeros(
-        wp_array.shape, dtype=wp.dtype_to_torch(wp_array.dtype)
-      )
+    if device.is_cpu and wp_array.size == 0:
+      scalar_type = getattr(wp_array.dtype, "_wp_scalar_type_", wp_array.dtype)
+      shape = (*wp_array.shape, *getattr(wp_array.dtype, "_shape_", ()))
+      scalar_type = getattr(wp_array.dtype, "_wp_scalar_type_", wp_array.dtype)
+      shape = (*wp_array.shape, *getattr(wp_array.dtype, "_shape_", ()))
+      self._torch_tensor = torch.zeros(shape, dtype=wp.dtype_to_torch(scalar_type))
     else:
-      self._tensor = wp.to_torch(wp_array)
+      self._torch_tensor = wp.to_torch(wp_array)
 
     if (
       nworld is not None
       and nworld > 1
-      and len(self._tensor.shape) > 0
-      and self._tensor.shape[0] == 1
-      and (self._tensor.stride(0) == 0 or getattr(wp_array, "_is_batched", False))
+      and len(self._torch_tensor.shape) > 0
+      and self._torch_tensor.shape[0] == 1
+      and (self._torch_tensor.stride(0) == 0 or getattr(wp_array, "_is_batched", False))
     ):
-      new_shape = (nworld,) + self._tensor.shape[1:]
-      self._tensor = self._tensor.expand(new_shape)
+      new_shape = (nworld,) + self._torch_tensor.shape[1:]
+      self._torch_tensor = self._torch_tensor.expand(new_shape)
 
-    self._is_cuda = not self._wp_array.device.is_cpu  # type: ignore
-    self._torch_stream = self._setup_stream()
-
-  def _setup_stream(self) -> Optional[torch.cuda.Stream]:
-    """Setup appropriate stream for the device."""
-    if not self._is_cuda:
-      return None
-
-    try:
-      warp_stream = wp.get_stream(self._wp_array.device)
-      return torch.cuda.ExternalStream(warp_stream.cuda_stream)
-    except Exception as e:
-      # Fallback to default stream if external stream creation fails.
-      print(f"Warning: Could not create external stream: {e}")
-      return torch.cuda.current_stream(self._tensor.device)
+  @property
+  def _tensor(self) -> torch.Tensor:
+    return self._torch_tensor
 
   @property
   def wp_array(self) -> wp.array:
@@ -66,11 +61,7 @@ class TorchArray:
 
   def __setitem__(self, idx: Any, value: Any) -> None:
     """Set item(s) in the tensor using standard indexing."""
-    if self._is_cuda and self._torch_stream is not None:
-      with torch.cuda.stream(self._torch_stream):
-        self._tensor[idx] = value
-    else:
-      self._tensor[idx] = value
+    self._torch_tensor[idx] = value
 
   def __getattr__(self, name: str) -> Any:
     """Delegate attribute access to the underlying tensor."""
@@ -190,7 +181,7 @@ class WarpBridge(Generic[T]):
   IMPORTANT: This wrapper is read-only. To modify array data, use
   in-place operations like `obj.field[:] = value`. Direct assignment
   like `obj.field = new_array` will raise an AttributeError to prevent
-  accidental memory address changes that break CUDA graphs.
+  accidental memory address changes that break GPU graphs.
   """
 
   def __init__(self, struct: T, nworld: int | None = None) -> None:
@@ -221,10 +212,10 @@ class WarpBridge(Generic[T]):
     return val
 
   def __setattr__(self, name: str, value: Any) -> None:
-    """Prevent attribute setting to maintain CUDA graph safety."""
+    """Prevent attribute setting to maintain GPU graph safety."""
     raise AttributeError(
       f"Cannot set attribute '{name}' on WarpBridge. "
-      f"This wrapper is read-only to preserve memory addresses for CUDA graphs. "
+      f"This wrapper is read-only to preserve memory addresses for GPU graphs. "
       f"Use in-place operations instead: obj.{name}[:] = value"
     )
 

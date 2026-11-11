@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
 
+import torch
 import tyro
 
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
@@ -47,21 +48,28 @@ class TrainConfig:
 
 
 def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
-  cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-  if cuda_visible == "":
+  backend = "cuda" if torch.backends.cuda.is_built() else "xpu"
+  visibility_variable = (
+    "CUDA_VISIBLE_DEVICES" if backend == "cuda" else "ZE_AFFINITY_MASK"
+  )
+  visible = os.environ.get(visibility_variable, "")
+  if visible == "":
     device = "cpu"
     seed = cfg.agent.seed
     rank = 0
   else:
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     rank = int(os.environ.get("RANK", "0"))
-    # Set EGL device to match the CUDA device.
-    os.environ["MUJOCO_EGL_DEVICE_ID"] = str(local_rank)
-    device = f"cuda:{local_rank}"
+    if backend == "cuda":
+      # Set EGL device to match the CUDA device.
+      os.environ["MUJOCO_EGL_DEVICE_ID"] = str(local_rank)
+    else:
+      torch.xpu.set_device(local_rank)
+    device = f"{backend}:{local_rank}"
     # Set seed to have diversity in different processes.
     seed = cfg.agent.seed + rank
 
-  configure_torch_backends()
+  configure_torch_backends(device=device)
 
   cfg.agent.seed = seed
   cfg.env.seed = seed
@@ -189,14 +197,17 @@ def launch_training(task_id: str, args: TrainConfig | None = None):
     log_dir_name += f"_{args.agent.run_name}"
   log_dir = log_root_path / log_dir_name
 
-  # Select GPUs based on CUDA_VISIBLE_DEVICES and user specification.
+  # Select GPUs based on device visibility and user specification.
   selected_gpus, num_gpus = select_gpus(args.gpu_ids)
 
   # Set environment variables for all modes.
+  visibility_variable = (
+    "CUDA_VISIBLE_DEVICES" if torch.backends.cuda.is_built() else "ZE_AFFINITY_MASK"
+  )
   if selected_gpus is None:
-    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    os.environ[visibility_variable] = ""
   else:
-    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, selected_gpus))
+    os.environ[visibility_variable] = ",".join(map(str, selected_gpus))
 
   if num_gpus <= 1:
     # CPU or single GPU: run directly without torchrunx.
@@ -218,12 +229,16 @@ def launch_training(task_id: str, args: TrainConfig | None = None):
         # Default: put logs in training directory.
         os.environ["TORCHRUNX_LOG_DIR"] = str(log_dir / "torchrunx")
 
+    copied_env_vars = torchrunx.DEFAULT_ENV_VARS_FOR_COPY + ("MUJOCO*",)
+    if not torch.backends.cuda.is_built():
+      copied_env_vars += ("ONEAPI*", "ZE_*", "SYCL_*", "CCL_*")
+
     print(f"[INFO] Launching training with {num_gpus} GPUs", flush=True)
     torchrunx.Launcher(
       hostnames=["localhost"],
       workers_per_host=num_gpus,
       backend=None,  # Let rsl_rl handle process group initialization.
-      copy_env_vars=torchrunx.DEFAULT_ENV_VARS_FOR_COPY + ("MUJOCO*",),
+      copy_env_vars=copied_env_vars,
     ).run(run_train, task_id, args, log_dir)
 
 

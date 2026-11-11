@@ -25,6 +25,7 @@ from mjlab.tasks.tracking.mdp.metrics import (
   compute_mpkpe,
   compute_root_relative_mpkpe,
 )
+from mjlab.utils.device import resolve_device
 from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 
@@ -40,7 +41,7 @@ class EvaluateConfig:
   num_envs: int = 1024
   """Number of parallel environments (= number of episodes to evaluate)."""
   device: str | None = None
-  """Device to run on. Defaults to CUDA if available."""
+  """Torch device to run on. Defaults to CUDA, then XPU, then CPU."""
   output_file: str | None = None
   """Optional path to save metrics as JSON."""
   log_root: str = "logs/rsl_rl"
@@ -49,8 +50,8 @@ class EvaluateConfig:
 
 def run_evaluate(task_id: str, cfg: EvaluateConfig) -> dict[str, float]:
   """Run policy evaluation and compute metrics."""
-  configure_torch_backends()
-  device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+  device = resolve_device(cfg.device)
+  configure_torch_backends(device=device)
 
   # Load configs.
   env_cfg = load_env_cfg(task_id, play=False)

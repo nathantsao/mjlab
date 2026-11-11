@@ -8,6 +8,7 @@ import warp as wp
 from conftest import get_test_device
 
 from mjlab.sim.sim_data import TorchArray, WarpBridge
+from mjlab.utils.device import get_warp_device
 
 
 @dataclass
@@ -24,13 +25,13 @@ def device():
 
 @pytest.fixture
 def mock_data(device):
-  with wp.ScopedDevice(device):
+  with wp.ScopedDevice(get_warp_device(device)):
     return MockData(arr=wp.array([[1.0, 2.0], [3.0, 4.0]], dtype=wp.float32))
 
 
 def test_torch_array_shares_memory(device):
   """TorchArray modifications affect underlying warp array."""
-  with wp.ScopedDevice(device):
+  with wp.ScopedDevice(get_warp_device(device)):
     wp_arr = wp.array([1.0, 2.0], dtype=wp.float32)
   torch_arr = TorchArray(wp_arr)
   torch_arr[0] = 99.0
@@ -39,7 +40,7 @@ def test_torch_array_shares_memory(device):
 
 def test_torch_array_ops_work(device):
   """TorchArray supports PyTorch operations."""
-  with wp.ScopedDevice(device):
+  with wp.ScopedDevice(get_warp_device(device)):
     wp_arr = wp.array([1.0, 2.0], dtype=wp.float32)
   torch_arr = TorchArray(wp_arr)
   assert torch.allclose(torch_arr * 2, torch.tensor([2.0, 4.0], device=device))
@@ -48,7 +49,7 @@ def test_torch_array_ops_work(device):
 
 def test_torch_array_expands_batched_singleton_world_dim(device):
   """Size-1 world dim expands to nworld when mjwarp marks the array batched."""
-  with wp.ScopedDevice(device):
+  with wp.ScopedDevice(get_warp_device(device)):
     wp_arr = wp.array([[1.0, 2.0]], dtype=wp.float32)
   setattr(wp_arr, "_is_batched", True)  # noqa: B010
   torch_arr = TorchArray(wp_arr, nworld=4)
@@ -57,7 +58,7 @@ def test_torch_array_expands_batched_singleton_world_dim(device):
 
 def test_torch_array_keeps_unbatched_singleton_dim(device):
   """A real size-1 leading dim without the batched marker is not expanded."""
-  with wp.ScopedDevice(device):
+  with wp.ScopedDevice(get_warp_device(device)):
     wp_arr = wp.array([[1.0, 2.0]], dtype=wp.float32)
   torch_arr = TorchArray(wp_arr, nworld=4)
   assert torch_arr.shape == (1, 2)

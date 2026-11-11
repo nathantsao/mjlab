@@ -342,9 +342,10 @@ ALL_TERRAINS_CFG = TerrainGeneratorCfg(
 
 if __name__ == "__main__":
   import mujoco.viewer
-  import torch
 
-  device = "cuda" if torch.cuda.is_available() else "cpu"
+  from mjlab.utils.device import resolve_device
+
+  device = resolve_device()
 
   terrain_cfg = TerrainEntityCfg(
     terrain_type="generator",
