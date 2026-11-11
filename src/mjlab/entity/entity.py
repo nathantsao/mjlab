@@ -857,6 +857,10 @@ class Entity:
       site_effort_target=site_effort_target,
       encoder_bias=encoder_bias,
     )
+    # Position targets zeroed by reset() and not set since.
+    self._cleared_joint_pos_target = torch.zeros_like(
+      joint_pos_target, dtype=torch.bool
+    )
 
   def update(self, dt: float) -> None:
     """Advance actuator internal state by one physics substep.
@@ -873,6 +877,7 @@ class Entity:
     and by commands that teleport the robot to a new pose mid-episode.
     """
     self._data.clear_state(env_ids)
+    self._cleared_joint_pos_target[slice(None) if env_ids is None else env_ids] = True
 
     for act in self._actuators:
       act.reset(env_ids)
@@ -886,13 +891,27 @@ class Entity:
     )
     self.reset(env_ids)
 
-  def write_data_to_sim(self) -> None:
+  def write_data_to_sim(self, env_ids: torch.Tensor | None = None) -> None:
     """Convert actuator targets into low-level controls and write them to the sim.
 
     Called before each ``sim.step()`` within the decimation loop. Builtin actuators are
     applied in a single batched operation; custom actuators are applied individually.
+
+    Pass ``env_ids`` after a reset to initialize only those environments' controls
+    and backfill their actuator histories without advancing simulation time.
+    Cleared position targets are written as the post-reset joint positions, so
+    delayed actuators hold the reset pose instead of commanding 0.
     """
-    self._apply_actuator_controls()
+    if env_ids is None or not self.is_actuated:
+      self._apply_actuator_controls(env_ids)
+      return
+    targets = self._data.joint_pos_target
+    stored = targets[env_ids]
+    targets[env_ids] = torch.where(
+      self._cleared_joint_pos_target[env_ids], self._data.joint_pos[env_ids], stored
+    )
+    self._apply_actuator_controls(env_ids)
+    targets[env_ids] = stored
 
   def write_ctrl_to_sim(
     self,
@@ -1069,6 +1088,7 @@ class Entity:
       joint_ids = slice(None)
     env_ids, joint_ids = _outer_index(env_ids, joint_ids)
     self._data.joint_pos_target[env_ids, joint_ids] = position
+    self._cleared_joint_pos_target[env_ids, joint_ids] = False
 
   def set_joint_velocity_target(
     self,
@@ -1331,10 +1351,12 @@ class Entity:
       free_joint_v_adr=free_joint_v_adr,
     )
 
-  def _apply_actuator_controls(self) -> None:
-    self._builtin_group.apply_controls(self._data)
-    self._fused_actuator_group.apply_controls(self._data)
+  def _apply_actuator_controls(self, env_ids: torch.Tensor | None = None) -> None:
+    self._builtin_group.apply_controls(self._data, env_ids)
+    self._fused_actuator_group.apply_controls(self._data, env_ids)
+    rows = slice(None) if env_ids is None else env_ids
     for act in self._custom_actuators:
       command = act.get_command(self._data)
+      command.reset_env_ids = env_ids
       command = act.apply_delay(command)
-      self._data.write_ctrl(act.compute(command), act.ctrl_ids)
+      self._data.write_ctrl(act.compute(command)[rows], act.ctrl_ids, env_ids)

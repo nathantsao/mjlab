@@ -15,8 +15,14 @@ Added
   kernels for Blackwell GPUs.
 - Added ``SimulationCfg.graph_conditional`` to toggle MuJoCo Warp's CUDA graph
   conditional nodes, which require CUDA 12.4 or newer.
+- ``RslRlBaseRunnerCfg.logger`` accepts the import path of an
+  ``rsl_rl.utils.LogWriter`` subclass, e.g. ``"my_pkg.writers:MyLogWriter"``.
 - Added ``RewardManager.term_rewards`` and ``RewardManager.get_term()`` for the
   per-term reward vector from the last step :issue:`1223`.
+- Added ``MjlabOnPolicyRunner.get_export_metadata()`` so custom runners can add
+  fields to the exported ONNX metadata by overriding it, and
+  ``MjlabOnPolicyRunner.export_onnx_on_save`` to export ONNX on every checkpoint.
+  The velocity, manipulation and tracking runners now share this export path.
 
 Changed
 ^^^^^^^
@@ -31,6 +37,8 @@ Changed
 - ``BuiltinDcMotorActuatorCfg`` PID gains are now in torque space, following
   MuJoCo 3.14. VELOCITY mode requires ``damping > 0`` and ``stiffness = 0``, and
   VOLTAGE mode rejects ``voltage_limit`` and ``slew_rate``.
+- Task runners upload exported ONNX policies through the log writer instead of
+  ``wandb.save``, and name the run in the ONNX metadata after the log directory.
 - Bumped ``rsl-rl-lib`` from 5.5.0 to 5.5.1. This removes the need for capping
   ``wandb`` below 0.29.
 
@@ -41,6 +49,9 @@ Changed
 Fixed
 ^^^^^
 
+- Delayed position actuators now hold the post-reset joint positions until the
+  first action arrives, instead of driving toward 0 for their first ``lag``
+  physics steps after every reset. Targets set during the reset are kept.
 - ``posture`` and ``variable_posture`` now pair each joint with its own ``std`` when
   ``asset_cfg.preserve_order=True``.
 - ``apply_body_impulse`` now applies ``body_point_offset`` in the body frame, as
@@ -52,6 +63,9 @@ Fixed
   failed to load.
 - The cartpole ``small_control`` reward term now matches dm_control, which reaches 0
   at the control margin (``value_at_margin=0``) instead of 0.1.
+- Partial environment resets now preserve untouched environments' actuator delay
+  histories, lag schedules, and control outputs in both explicit and automatic
+  resets :issue:`1216`.
 - ``VideoRecorder`` now evaluates ``episode_trigger`` only at the start of an episode,
   so a recording no longer restarts mid-episode and overwrites the video.
 - String-keyed ``dr.geom_size`` and isotropic ``dr.pair_friction`` ranges now
@@ -98,6 +112,9 @@ Fixed
 - Envs sampled by ``rel_forward_envs`` now keep their straight command. Previously,
   if an env was also sampled as a heading or world frame env, its yaw rate was
   replaced by a heading turn or its velocity by the world frame sample.
+- ``MaterialCfg.geom_names_expr`` now assigns the material to all matching unnamed
+  geoms. Previously it looked up matched names via ``spec.geom(name)``, which always
+  returned the first unnamed geom and left any remaining unnamed geoms unchanged.
 
 Version 1.6.0 (August 8, 2026)
 ------------------------------
