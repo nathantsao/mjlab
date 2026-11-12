@@ -232,7 +232,7 @@ def launch_training(task_id: str, args: TrainConfig | None = None):
 
     copied_env_vars = torchrunx.DEFAULT_ENV_VARS_FOR_COPY + ("MUJOCO*",)
     if not torch.backends.cuda.is_built():
-      copied_env_vars += ("ONEAPI*", "ZE_*", "SYCL_*", "CCL_*")
+      copied_env_vars += ("ONEAPI*", "ZE_*", "SYCL_*", "CCL_*", "FI_*", "GLOO_*")
 
     print(f"[INFO] Launching training with {num_gpus} GPUs", flush=True)
     torchrunx.Launcher(
